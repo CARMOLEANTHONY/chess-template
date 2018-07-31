@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <title>Document</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+        }
+
+        html,
+        body {
+            width: 100%;
+            height: 100%;
+        }
+
+        div#canvas-frame {
+            border: none;
+            cursor: pointer;
+            background-color: #EEEEEE;
+            position: absolute;
+            top: 0px;
+            left: 0px;
+            right: 0;
+            bottom: 0;
+        }
+
+        #tip-container {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #000;
+            opacity: 0.5;
+            display: none;
+            z-index: 999;
+        }
+
+        #again {
+            padding: 50px 100px;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 30px;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="canvas-frame"></div>
+    <div id="tip-container">
+        <button id="again">再来一次</button>
+    </div>
+</body>
+<script src="./lib/threeJs/three.min.js"></script>
+<script src="./lib/OrbitControlsJs/orbitControls.js"></script>
+<script src="./lib/statsJs/stats.min.js"></script>
+<script src="./lib/initThree.js"></script>
+<script>
+    window.onload = function () {
+        let container, renderer, camera, scene, stats, orbitControls;
+        let netGroups, rotationDone, pieces, whichTurn;
+        let lineSpace, lineCount;
+        let victoryGroups, victoryImage, isVictory, victoryLoaded;
+        let againButton, tipMarks;
+
+        container = document.querySelector("#canvas-frame");
+
+        tipMarks = document.querySelector("#tip-container");
+        againButton = document.querySelector("#again");
+
+        const _INITTHREE = INITTHREE(container, {
+            clearColor: '#404040',
+            cameraPosition: [0, 0, 2000],
+            EnviromentLightColor: 0xffffff
+        })
+
+
+        renderer = _INITTHREE.renderer
+        camera = _INITTHREE.camera
+        scene = _INITTHREE.scene
+        stats = _INITTHREE.stats
+        orbitControls = _INITTHREE.orbitControls
+
+        renderer.alpha = true
+
+        netGroups = new THREE.Group()
+        rotationDone = false
+        whichTurn = 'white'
+        pieces = {
+            black: [],
+            white: []
+        }
+        lineSpace = 20
+        lineCount = 19
+
+
+        /**
+         * 画网格
+         * @param {number} lineCount 一行网格数量
+         * @param {number} lineSpace 每行高度
+         */
+        const strokeNet = function (lineCount, lineSpace) {
+
+            let lineLength;
+
+            lineCount = lineCount || 19
+            lineSpace = lineSpace || 20
+            lineLength = (lineCount - 1) * lineSpace
+
+            // 划横线
+            for (let i = 0; i < lineCount; i++) {
+                let startPoint = [0 - lineLength / 2, lineSpace * (i - (lineCount - 1) / 2), 0]
+                let endPoint = [0 + lineLength / 2, lineSpace * (i - (lineCount - 1) / 2), 0]
+
+                netGroups.add(strokeLine(startPoint, endPoint))
+            }
+
+            // 划竖线
+            for (let i = 0; i < lineCount; i++) {
+                let startPoint = [lineSpace * (i - (lineCount - 1) / 2), 0 - lineLength / 2, 0]
+                let endPoint = [lineSpace * (i - (lineCount - 1) / 2), 0 + lineLength / 2, 0]
+                netGroups.add(strokeLine(startPoint, endPoint))
+            }
+
+            // 画透明方块
+            for (let i = 0; i < lineCount; i++) {
+                for (let j = 0; j < lineCount; j++) {
+
+                    let rect = strokeRect(lineSpace, lineSpace, [
+                        lineSpace * (i - (lineCount - 1) / 2),
+                        lineSpace * (j - (lineCount - 1) / 2), -1
+                    ])
+
+                    rect.receiveShadow = true
+
+                    netGroups.add(rect)
+                }
+            }
+
+            /**
+             * 解决物体围绕自身中心旋转的问题
+             * 解决方法：
+             *  将需要绕同一旋转轴旋转的物体添加进一个组
+             */
+
+            scene.add(netGroups)
+
+            netGroups.rotation.x = -0.20 * Math.PI
+        }
+
+        const strokeLine = function (vertice1Position, vertice2Position, color, opacity) {
+            let lineGeometry = new THREE.Geometry()
+
+            lineGeometry.vertices.push(new THREE.Vector3(...vertice1Position))
+            lineGeometry.vertices.push(new THREE.Vector3(...vertice2Position))
+
+            let line = new THREE.Line(lineGeometry, new THREE.LineBasicMaterial({
+                color: color || '#606060'
+            }))
+
+            return line
+        }
+
+        const strokeRect = function (width, height, positionOptions) {
+            let planeGeometry = new THREE.PlaneGeometry(width, height)
+
+            let planeMaterial = new THREE.MeshLambertMaterial({
+                color: 'orange',
+                transparent: true,
+                opacity: 0.8
+            })
+
+            let plane = new THREE.Mesh(planeGeometry, planeMaterial)
+
+            plane.position.set(...positionOptions)
+
+
+            return plane
+        }
+
+        const createChessPiece = function (color, position) {
+            let sphereGeometry, sphereMaterial, sphere
+
+            sphereGeometry = new THREE.SphereGeometry(lineSpace / 2, 32, 32)
+            sphereMaterial = new THREE.MeshLambertMaterial({
+                color: color
+            })
+
+            sphere = new THREE.Mesh(sphereGeometry, sphereMaterial)
+
+            sphere.scale.z = 0.5
+
+            sphere.position.set(position.x, position.y, sphereGeometry.parameters.radius * sphere.scale.z + 2)
+
+            sphere.castShadow = true
+
+            sphere.name = 'piece'
+
+            return sphere
+        }
+
+        const ceilingLampLight = function () {
+            let ceilingLampLight = new THREE.SpotLight(0xffffff);
+
+            ceilingLampLight.position.set(0, 0, 300);
+            ceilingLampLight.castShadow = true;
+            ceilingLampLight.angle = 0.7;
+            ceilingLampLight.shadow.camera.near = 1;
+            ceilingLampLight.shadow.mapSize.width = 1024;
+            ceilingLampLight.shadow.mapSize.height = 1024;
+
+            netGroups.add(ceilingLampLight)
+
+        }
+
+        const rotaeAnimation = function () {
+            if (camera.position.z > 600) {
+                camera.position.z -= 10;
+                camera.rotation.z += 0.03 * Math.PI
+            }
+        }
+
+        const initPiece = function () {
+            whichTurn = 'white'
+            pieces = {
+                black: [],
+                white: []
+            }
+
+            netGroups.children = netGroups.children.filter(item => item.name !== 'piece')
+        }
+
+        const judgeVictoryOrFaile = function (piece) {
+
+            let directionArr = getCommonTypePieces(piece)
+
+            return {
+                victory: directionArr.some(item => item == 5),
+                victoryItem: directionArr.pieceType
+            }
+        }
+
+        const createTexture = function (src) {
+
+            let texture = new THREE.TextureLoader().load(src)
+
+            let material = new THREE.MeshLambertMaterial({
+                map: texture,
+                color: 0xffffff
+            });
+
+            return material
+        }
+
+        const createVictoryImage = function (width, height, src, position, name) {
+            let result, planeGeometry, textMaterial
+
+            planeGeometry = new THREE.PlaneGeometry(width, height)
+            textMaterial = createTexture(src)
+
+            result = new THREE.Mesh(planeGeometry, textMaterial)
+
+            result.position.set(...position)
+
+            result.name = name || 'victory'
+
+            return result
+        }
+
+        const getCommonTypePieces = function (piece) {
+            let directionArr, index, position, testPositions;
+
+            directionArr = [1, 1, 1, 1]
+            index = 5 // 循环层数
+            position = piece.position
+            testPositions = []
+
+            directionArr.pieceType = piece.pieceType
+
+            for (let i = 1; i < index; i++) {
+                let perSpace = i * lineSpace
+                testPositions = [
+                    [{
+                            x: position.x,
+                            y: position.y + perSpace
+                        },
+                        {
+                            x: position.x,
+                            y: position.y - perSpace
+                        }
+                    ],
+                    [{
+                            x: position.x + perSpace,
+                            y: position.y + perSpace
+                        },
+                        {
+                            x: position.x - perSpace,
+                            y: position.y - perSpace
+                        }
+                    ],
+                    [{
+                            x: position.x + perSpace,
+                            y: position.y
+                        },
+                        {
+                            x: position.x - perSpace,
+                            y: position.y
+                        }
+                    ],
+                    [{
+                        x: position.x + perSpace,
+                        y: position.y - perSpace
+                    }, {
+                        x: position.x - perSpace,
+                        y: position.y + perSpace
+                    }]
+                ]
+
+                testPositions.forEach((i, j) => {
+                    Object.values(pieces).forEach(v => {
+                        v.forEach(item => {
+                            i.forEach(m => {
+                                if (item && item.position.x === m.x && item.position
+                                    .y ===
+                                    m.y && item.pieceType ===
+                                    piece.pieceType) directionArr[j]++
+                            })
+                        })
+                    })
+                })
+            }
+
+            return directionArr
+
+        }
+
+        const isValuableNet = function (piece) {
+            let isValuable = true
+
+            Object.values(pieces).forEach(v => {
+                v.forEach(item => {
+                    if (item && item.position.x === piece.x && item.position.y === piece.y)
+                        isValuable = false
+                })
+            })
+
+            return isValuable
+        }
+
+        const clickHandle = function (arr, callback) {
+            arr.forEach(v => {
+                v.onclick = function () {
+                    callback(this)
+                }
+            });
+        }
+
+        const pieceCliclHandle = function (self, callback) {
+            let piece, result
+
+            piece = createChessPiece(whichTurn, self.position)
+
+            piece.pieceType = whichTurn
+
+            if (!isValuableNet(piece.position)) return
+
+            pieces[whichTurn].push(piece)
+
+            netGroups.add(piece)
+
+            whichTurn = whichTurn === 'white' ? 'black' : 'white'
+
+            result = judgeVictoryOrFaile(piece)
+
+            // 一方胜利后的操作
+            if (result.victory) {
+                setTimeout(() => {
+                    callback && callback(result)
+                }, 0)
+            }
+        }
+
+        const InitVictoryGroups = function () {
+            victoryGroups = new THREE.Group()
+            isVictory = false
+
+            victoryImage = createVictoryImage(200, 100, './images/win.png', [0, 200, 30], 'victory')
+
+
+            victoryImage.visible = false
+
+            againButton.onclick = function () {
+                isVictory = false
+                tipMarks.style.display = "none"
+                victoryLoaded = false
+                initPiece()
+            }
+
+            victoryGroups.add(victoryImage)
+
+            scene.add(victoryGroups)
+        }
+
+        const victoryAnimation = function () {
+
+            if (!victoryLoaded && victoryImage.position.y >= 30) {
+                victoryImage.position.y -= 4
+            } else {
+                victoryLoaded = true
+                setTimeout(() => {
+                    victoryImage.visible = false
+                    victoryImage.position.y = 200
+                    tipMarks.style.display = "block"
+                }, 1000)
+            }
+        }
+        
+        const render = function () {
+            renderer.render(scene, camera)
+            stats.update()
+
+            if (isVictory) {
+
+                victoryImage.visible = true
+                victoryAnimation()
+            }
+
+            rotaeAnimation()
+
+            if (!rotationDone && camera.position.z <= 600) {
+                rotationDone = true
+                camera.rotation.z = 0
+            }
+
+            requestAnimationFrame(render)
+        }
+        
+        const init = function () {
+
+            victoryLoaded = false
+
+            strokeNet(lineCount, lineSpace)
+
+            ceilingLampLight()
+
+            InitVictoryGroups()
+
+            clickHandle(netGroups.children, self => pieceCliclHandle(self, result => isVictory = true))
+
+            render()
+        }
+
+        init()
+
+    }
+</script>
+
+</html>
